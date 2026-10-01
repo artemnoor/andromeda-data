@@ -191,17 +191,17 @@ class CompetitionPool(UUIDPrimaryKeyMixin, Base):
 class AdmissionStatistic(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "admission_statistic"
     __table_args__ = (
-        UniqueConstraint("pool_id", "year", name="uq_admission_statistic_pool_year"),
-        CheckConstraint("year >= 1900", name="year_valid"),
+        UniqueConstraint("pool_id", "snapshot_date", name="uq_admission_statistic_pool_snapshot_date"),
         CheckConstraint("passing_score IS NULL OR passing_score >= 0", name="passing_score_nonnegative"),
         CheckConstraint("average_score IS NULL OR average_score >= 0", name="average_score_nonnegative"),
         CheckConstraint("enrolled_count IS NULL OR enrolled_count >= 0", name="enrolled_count_nonnegative"),
+        Index("ix_admission_statistic_snapshot_date", "snapshot_date"),
     )
 
     pool_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("competition_pool.id", ondelete="RESTRICT"), nullable=False
     )
-    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False)
     passing_score: Mapped[Decimal | None] = mapped_column(Numeric(7, 3))
     average_score: Mapped[Decimal | None] = mapped_column(Numeric(7, 3))
     enrolled_count: Mapped[int | None] = mapped_column(Integer)
@@ -223,12 +223,14 @@ class RequirementSet(UUIDPrimaryKeyMixin, Base):
     __table_args__ = (
         UniqueConstraint("offering_id", "name", name="uq_requirement_set_offering_name"),
         CheckConstraint("length(btrim(name)) > 0", name="name_not_blank"),
+        CheckConstraint("status IN ('draft', 'published')", name="status_valid"),
     )
 
     offering_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("program_offering.id", ondelete="RESTRICT"), nullable=False
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'draft'"))
 
 
 class RequirementNode(UUIDPrimaryKeyMixin, Base):
@@ -250,7 +252,7 @@ class RequirementNode(UUIDPrimaryKeyMixin, Base):
             "OR (operator_type IN ('and', 'or') AND min_count IS NULL)))",
             name="node_shape_valid",
         ),
-        CheckConstraint("min_score IS NULL OR min_score >= 0", name="min_score_nonnegative"),
+        CheckConstraint("min_score IS NULL OR (min_score >= 0 AND min_score <= 100)", name="min_score_in_range"),
         CheckConstraint("parent_node_id IS NULL OR parent_node_id <> id", name="not_own_parent"),
         Index(
             "uq_requirement_node_single_root",

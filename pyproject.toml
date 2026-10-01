@@ -13,5 +13,17 @@ dependencies = [
     "psycopg[binary]>=3.2,<4.0",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=8.0,<9.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: uses a real PostgreSQL database",
+    "migration: performs destructive Alembic migration round trips",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]

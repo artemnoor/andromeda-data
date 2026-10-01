@@ -101,3 +101,39 @@ class RuleSetMember(Base):
     )
     rule_version_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     rule_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+
+
+class PolicyRuleProgramScope(Base):
+    """A rule version applies to all offerings of a program in a rule set's campaign."""
+
+    __tablename__ = "policy_rule_program_scope"
+    __table_args__ = (
+        Index("ix_policy_rule_program_scope_program", "program_id"),
+    )
+
+    rule_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("policy_rule_version.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    program_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("program.id", ondelete="RESTRICT"), primary_key=True
+    )
+
+
+class PolicyRuleOfferingScope(Base):
+    """A rule version applies to one explicitly selected offering."""
+
+    __tablename__ = "policy_rule_offering_scope"
+    __table_args__ = (
+        Index("ix_policy_rule_offering_scope_offering", "offering_id"),
+    )
+
+    rule_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("policy_rule_version.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    offering_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("program_offering.id", ondelete="RESTRICT"), primary_key=True
+    )

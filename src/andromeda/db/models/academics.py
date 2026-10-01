@@ -57,7 +57,8 @@ class OlympiadBenefit(UUIDPrimaryKeyMixin, Base):
             name="uq_olympiad_benefit_business_key",
         ),
         CheckConstraint(
-            "confirmation_score IS NULL OR confirmation_score >= 0", name="confirmation_score_nonnegative"
+            "confirmation_score IS NULL OR (confirmation_score >= 0 AND confirmation_score <= 100)",
+            name="confirmation_score_in_range",
         ),
         Index("ix_olympiad_benefit_offering", "offering_id"),
         Index("ix_olympiad_benefit_result_type", "result_type_id"),
