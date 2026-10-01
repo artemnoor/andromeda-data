@@ -84,7 +84,9 @@ class Program(UUIDPrimaryKeyMixin, Base):
     code: Mapped[str] = mapped_column(Text, nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     degree_level: Mapped[str] = mapped_column(Text, nullable=False)
-    duration_months: Mapped[int] = mapped_column(Integer, nullable=False)
+    # A direction can contain tracks with different durations. Keep this nullable
+    # as legacy/general metadata; the concrete duration belongs to EducationalProgram.
+    duration_months: Mapped[int | None] = mapped_column(Integer)
     description: Mapped[str | None] = mapped_column(Text)
 
 
@@ -110,6 +112,42 @@ class ProgramDepartment(Base):
     program_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     department_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     university_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+
+
+class EducationalProgram(UUIDPrimaryKeyMixin, Base):
+    """A concrete track/profile of a coded direction, delivered by a department."""
+
+    __tablename__ = "educational_program"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["program_id", "university_id"],
+            ["program.id", "program.university_id"],
+            name="fk_educational_program_program_university",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["department_id", "university_id"],
+            ["department.id", "department.university_id"],
+            name="fk_educational_program_department_university",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("program_id", "department_id", "name", name="uq_educational_program_track"),
+        UniqueConstraint(
+            "id", "program_id", "university_id", name="uq_educational_program_id_program_university"
+        ),
+        UniqueConstraint("id", "program_id", name="uq_educational_program_id_program"),
+        CheckConstraint("length(btrim(name)) > 0", name="name_not_blank"),
+        CheckConstraint("duration_months > 0", name="duration_months_positive"),
+        Index("ix_educational_program_program_university", "program_id", "university_id"),
+        Index("ix_educational_program_department_university", "department_id", "university_id"),
+    )
+
+    program_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    department_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    university_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    duration_months: Mapped[int] = mapped_column(Integer, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
 
 
 class AdmissionCampaign(UUIDPrimaryKeyMixin, Base):
@@ -147,18 +185,32 @@ class ProgramOffering(UUIDPrimaryKeyMixin, Base):
             name="fk_program_offering_campaign_university",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["educational_program_id", "program_id", "university_id"],
+            ["educational_program.id", "educational_program.program_id", "educational_program.university_id"],
+            name="fk_program_offering_educational_program_context",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint(
-            "program_id", "campaign_id", "study_form", "language", name="uq_program_offering_business_key"
+            "educational_program_id", "campaign_id", "study_form", "language",
+            name="uq_program_offering_business_key",
         ),
         CheckConstraint("length(btrim(study_form)) > 0", name="study_form_not_blank"),
         CheckConstraint("length(btrim(language)) > 0", name="language_not_blank"),
         Index("ix_program_offering_program_university", "program_id", "university_id"),
+        Index(
+            "ix_program_offering_educational_program_context",
+            "educational_program_id",
+            "program_id",
+            "university_id",
+        ),
         Index("ix_program_offering_campaign_university", "campaign_id", "university_id"),
     )
 
     program_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     campaign_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     university_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    educational_program_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     study_form: Mapped[str] = mapped_column(Text, nullable=False)
     language: Mapped[str] = mapped_column(Text, nullable=False)
 
@@ -191,7 +243,19 @@ class CompetitionPool(UUIDPrimaryKeyMixin, Base):
 class AdmissionStatistic(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "admission_statistic"
     __table_args__ = (
-        UniqueConstraint("pool_id", "snapshot_date", name="uq_admission_statistic_pool_snapshot_date"),
+        Index(
+            "uq_admission_statistic_pool_snapshot_date",
+            "pool_id",
+            "snapshot_date",
+            unique=True,
+            postgresql_where=text("snapshot_date IS NOT NULL"),
+        ),
+        Index(
+            "uq_admission_statistic_pool_without_snapshot",
+            "pool_id",
+            unique=True,
+            postgresql_where=text("snapshot_date IS NULL"),
+        ),
         CheckConstraint("passing_score IS NULL OR passing_score >= 0", name="passing_score_nonnegative"),
         CheckConstraint("average_score IS NULL OR average_score >= 0", name="average_score_nonnegative"),
         CheckConstraint("enrolled_count IS NULL OR enrolled_count >= 0", name="enrolled_count_nonnegative"),
@@ -201,7 +265,9 @@ class AdmissionStatistic(UUIDPrimaryKeyMixin, Base):
     pool_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("competition_pool.id", ondelete="RESTRICT"), nullable=False
     )
-    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # NULL means the source did not provide a real snapshot/publication date.
+    # Campaign year remains available through pool -> offering -> campaign.
+    snapshot_date: Mapped[date | None] = mapped_column(Date)
     passing_score: Mapped[Decimal | None] = mapped_column(Numeric(7, 3))
     average_score: Mapped[Decimal | None] = mapped_column(Numeric(7, 3))
     enrolled_count: Mapped[int | None] = mapped_column(Integer)

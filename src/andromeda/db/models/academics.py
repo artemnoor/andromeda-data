@@ -6,11 +6,13 @@ from decimal import Decimal
 from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -49,12 +51,24 @@ class OlympiadProfile(UUIDPrimaryKeyMixin, Base):
 class OlympiadBenefit(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "olympiad_benefit"
     __table_args__ = (
-        UniqueConstraint(
+        Index(
+            "uq_olympiad_benefit_business_key_with_exam",
             "olympiad_profile_id",
             "offering_id",
             "result_type_id",
             "benefit_type_id",
-            name="uq_olympiad_benefit_business_key",
+            "confirmation_exam_id",
+            unique=True,
+            postgresql_where=text("confirmation_exam_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_olympiad_benefit_business_key_without_exam",
+            "olympiad_profile_id",
+            "offering_id",
+            "result_type_id",
+            "benefit_type_id",
+            unique=True,
+            postgresql_where=text("confirmation_exam_id IS NULL"),
         ),
         CheckConstraint(
             "confirmation_score IS NULL OR (confirmation_score >= 0 AND confirmation_score <= 100)",
@@ -63,6 +77,7 @@ class OlympiadBenefit(UUIDPrimaryKeyMixin, Base):
         Index("ix_olympiad_benefit_offering", "offering_id"),
         Index("ix_olympiad_benefit_result_type", "result_type_id"),
         Index("ix_olympiad_benefit_benefit_type", "benefit_type_id"),
+        Index("ix_olympiad_benefit_confirmation_exam", "confirmation_exam_id"),
     )
 
     olympiad_profile_id: Mapped[uuid.UUID] = mapped_column(
@@ -77,20 +92,36 @@ class OlympiadBenefit(UUIDPrimaryKeyMixin, Base):
     benefit_type_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("benefit_type.id", ondelete="RESTRICT"), nullable=False
     )
+    confirmation_exam_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("exam.id", ondelete="RESTRICT")
+    )
     confirmation_score: Mapped[Decimal | None] = mapped_column(Numeric(7, 3))
 
 
 class Curriculum(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "curriculum"
     __table_args__ = (
-        UniqueConstraint("program_id", "version", name="uq_curriculum_program_version"),
+        ForeignKeyConstraint(
+            ["educational_program_id", "program_id"],
+            ["educational_program.id", "educational_program.program_id"],
+            name="fk_curriculum_educational_program_context",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("educational_program_id", "version", name="uq_curriculum_educational_program_version"),
         CheckConstraint("length(btrim(version)) > 0", name="version_not_blank"),
         CheckConstraint("start_year >= 1900", name="start_year_valid"),
+        Index("ix_curriculum_program_id", "program_id"),
+        Index(
+            "ix_curriculum_educational_program_context",
+            "educational_program_id",
+            "program_id",
+        ),
     )
 
     program_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("program.id", ondelete="RESTRICT"), nullable=False
     )
+    educational_program_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     version: Mapped[str] = mapped_column(Text, nullable=False)
     start_year: Mapped[int] = mapped_column(Integer, nullable=False)
 

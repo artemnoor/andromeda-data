@@ -10,13 +10,14 @@ from sqlalchemy import delete, insert, select, text, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.engine import Connection
 
-from andromeda.db.models.academics import Olympiad, OlympiadBenefit, OlympiadProfile
+from andromeda.db.models.academics import Curriculum, Olympiad, OlympiadBenefit, OlympiadProfile
 from andromeda.db.models.admissions import (
     AdmissionCampaign,
     AdmissionStatistic,
     BenefitType,
     CompetitionPool,
     Department,
+    EducationalProgram,
     Exam,
     FundingType,
     OlympiadResultType,
@@ -113,15 +114,66 @@ def _offering(
     *,
     study_form: str = "full_time",
     language: str = "ru",
+    educational_program_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
+    if educational_program_id is None:
+        educational_program_id = _educational_program(connection, university_id, program_id)
     return _insert_id(
         connection,
         ProgramOffering,
         university_id=university_id,
         program_id=program_id,
+        educational_program_id=educational_program_id,
         campaign_id=campaign_id,
         study_form=study_form,
         language=language,
+    )
+
+
+def _educational_program(
+    connection: Connection,
+    university_id: uuid.UUID,
+    program_id: uuid.UUID,
+    *,
+    name: str | None = None,
+    department_code: str | None = None,
+    duration_months: int = 48,
+) -> uuid.UUID:
+    department_code = department_code or f"dept_{program_id.hex[:16]}"
+    department_id = connection.execute(
+        select(Department.id).where(
+            Department.university_id == university_id,
+            Department.code == department_code,
+        )
+    ).scalar_one_or_none()
+    if department_id is None:
+        department_id = _insert_id(
+            connection,
+            Department,
+            university_id=university_id,
+            code=department_code,
+            name=f"Department {department_code}",
+        )
+
+    name = name or f"Track {program_id.hex}"
+    existing_id = connection.execute(
+        select(EducationalProgram.id).where(
+            EducationalProgram.program_id == program_id,
+            EducationalProgram.department_id == department_id,
+            EducationalProgram.name == name,
+        )
+    ).scalar_one_or_none()
+    if existing_id is not None:
+        return existing_id
+
+    return _insert_id(
+        connection,
+        EducationalProgram,
+        program_id=program_id,
+        department_id=department_id,
+        university_id=university_id,
+        name=name,
+        duration_months=duration_months,
     )
 
 
@@ -154,6 +206,95 @@ def test_program_and_campaign_must_belong_to_the_same_university(connection: Con
     _expect_rejected(
         connection,
         lambda: _offering(connection, university_a, program_a, campaign_b),
+    )
+
+
+def test_offerings_and_curricula_are_scoped_to_concrete_tracks_and_departments(
+    connection: Connection,
+) -> None:
+    university_id = _university(connection)
+    campaign_id = _campaign(connection, university_id)
+    program_id = _program(connection, university_id, "shared_direction")
+    track_a = _educational_program(
+        connection,
+        university_id,
+        program_id,
+        name="Intelligent systems",
+        department_code="iu5",
+        duration_months=48,
+    )
+    track_b = _educational_program(
+        connection,
+        university_id,
+        program_id,
+        name="Computing systems",
+        department_code="iu6",
+        duration_months=72,
+    )
+
+    offering_a = _offering(
+        connection, university_id, program_id, campaign_id, educational_program_id=track_a
+    )
+    offering_b = _offering(
+        connection, university_id, program_id, campaign_id, educational_program_id=track_b
+    )
+    assert offering_a != offering_b
+
+    # The same direction may have distinct plan versions for separate tracks.
+    _insert(
+        connection,
+        Curriculum,
+        program_id=program_id,
+        educational_program_id=track_a,
+        version="2026",
+        start_year=2026,
+    )
+    _insert(
+        connection,
+        Curriculum,
+        program_id=program_id,
+        educational_program_id=track_b,
+        version="2026",
+        start_year=2026,
+    )
+
+    other_program_id = _program(connection, university_id, "other_direction")
+    other_track_id = _educational_program(
+        connection, university_id, other_program_id, department_code="other_dept"
+    )
+    _expect_rejected(
+        connection,
+        lambda: _insert(
+            connection,
+            ProgramOffering,
+            university_id=university_id,
+            program_id=program_id,
+            educational_program_id=other_track_id,
+            campaign_id=campaign_id,
+            study_form="part_time",
+            language="ru",
+        ),
+    )
+
+    other_university_id = _university(connection, "other_uni")
+    other_department_id = _insert_id(
+        connection,
+        Department,
+        university_id=other_university_id,
+        code="foreign_department",
+        name="Foreign department",
+    )
+    _expect_rejected(
+        connection,
+        lambda: _insert(
+            connection,
+            EducationalProgram,
+            program_id=program_id,
+            department_id=other_department_id,
+            university_id=university_id,
+            name="Cross-university track",
+            duration_months=48,
+        ),
     )
 
 
@@ -439,6 +580,9 @@ def test_single_exam_scores_are_limited_to_zero_through_one_hundred(connection: 
         connection, OlympiadResultType, code="winner", name="Winner"
     )
     benefit_type_id = _insert_id(connection, BenefitType, code="bvi", name="No entrance exams")
+    confirmation_exam_id = _insert_id(
+        connection, Exam, code="confirmation_exam", name="Confirmation exam"
+    )
     _insert(
         connection,
         OlympiadBenefit,
@@ -446,6 +590,7 @@ def test_single_exam_scores_are_limited_to_zero_through_one_hundred(connection: 
         offering_id=offering_id,
         result_type_id=result_type_id,
         benefit_type_id=benefit_type_id,
+        confirmation_exam_id=confirmation_exam_id,
         confirmation_score=Decimal("100"),
     )
     _expect_rejected(
@@ -457,7 +602,22 @@ def test_single_exam_scores_are_limited_to_zero_through_one_hundred(connection: 
             offering_id=offering_id,
             result_type_id=result_type_id,
             benefit_type_id=_insert_id(connection, BenefitType, code="other", name="Other"),
+            confirmation_exam_id=confirmation_exam_id,
             confirmation_score=Decimal("100.001"),
+        ),
+    )
+    _expect_rejected(
+        connection,
+        lambda: _insert(
+            connection,
+            OlympiadBenefit,
+            olympiad_profile_id=olympiad_profile_id,
+            offering_id=offering_id,
+            result_type_id=result_type_id,
+            benefit_type_id=_insert_id(
+                connection, BenefitType, code="unknown_exam", name="Unknown exam case"
+            ),
+            confirmation_exam_id=_new_id(),
         ),
     )
 
@@ -514,6 +674,23 @@ def test_admission_statistic_uses_snapshot_dates_and_keeps_aggregate_scores_unbo
             pool_id=pool_id,
             snapshot_date=date(2027, 1, 1),
             passing_score=Decimal("-1"),
+        ),
+    )
+    _insert(
+        connection,
+        AdmissionStatistic,
+        pool_id=pool_id,
+        snapshot_date=None,
+        passing_score=Decimal("246"),
+    )
+    _expect_rejected(
+        connection,
+        lambda: _insert(
+            connection,
+            AdmissionStatistic,
+            pool_id=pool_id,
+            snapshot_date=None,
+            passing_score=Decimal("247"),
         ),
     )
     columns = connection.execute(
